@@ -1,0 +1,57 @@
+---
+# Secret — fill values and apply BEFORE deployments
+# Never commit real values. Use:
+#   kubectl create secret generic cinetrack-secrets \
+#     --namespace cinetrack \
+#     --from-literal=db-user=postgres \
+#     --from-literal=db-password=STRONG_PASSWORD \
+#     --from-literal=database-url='postgres://postgres:STRONG_PASSWORD@postgres:5432/movietracker?sslmode=disable' \
+#     --from-literal=jwt-secret=RANDOM_32_CHAR_STRING \
+#     --from-literal=tmdb-api-key=YOUR_TMDB_KEY
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cinetrack-secrets
+  namespace: cinetrack
+type: Opaque
+stringData:
+  db-user:      "postgres"
+  db-password:  "CHANGE_ME"
+  database-url: "postgres://postgres:CHANGE_ME@postgres:5432/movietracker?sslmode=disable"
+  jwt-secret:   "CHANGE_ME_32_CHAR_RANDOM_SECRET!!"
+  tmdb-api-key: ""
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cinetrack-ingress
+  namespace: cinetrack
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    # Uncomment when cert-manager is installed:
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  # tls:
+  #   - hosts:
+  #       - cinetrack.yourdomain.com
+  #     secretName: cinetrack-tls
+  rules:
+    - host: cinetrack.yourdomain.com   # ← replace with your domain
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 8080
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80

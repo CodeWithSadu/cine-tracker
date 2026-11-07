@@ -1,0 +1,208 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Cinetrack — GitLab CI/CD Pipeline
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Required CI/CD variables (Settings → CI/CD → Variables):
+#   DATABASE_URL      postgres://... (test DB for CI)
+#   JWT_SECRET        any 32+ char string
+#   TMDB_API_KEY      (optional)
+#   KUBE_CONFIG       base64-encoded kubeconfig for your cluster
+#   PROD_DATABASE_URL postgres://... (production DB)
+#   PROD_JWT_SECRET   strong random 32+ char string
+#   PROD_TMDB_KEY     (optional)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+image: docker:26
+
+services:
+  - docker:26-dind
+
+variables:
+  DOCKER_DRIVER:        overlay2
+  DOCKER_TLS_CERTDIR:   ""
+  BACKEND_IMAGE:        $CI_REGISTRY_IMAGE/backend
+  FRONTEND_IMAGE:       $CI_REGISTRY_IMAGE/frontend
+  HELM_RELEASE:         cinetrack
+  K8S_NAMESPACE:        cinetrack
+
+stages:
+  - test
+  - build
+  - push
+  - deploy
+
+# ── Shared before_script to log into GitLab registry ─────────────────────────
+.docker_login: &docker_login
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 1 — TEST
+# ─────────────────────────────────────────────────────────────────────────────
+
+test:backend:
+  stage: test
+  image: golang:1.22-alpine
+  services:
+    - postgres:16-alpine
+  variables:
+    POSTGRES_DB:       movietracker_test
+    POSTGRES_USER:     postgres
+    POSTGRES_PASSWORD: testpassword
+    DATABASE_URL:      "postgres://postgres:testpassword@postgres:5432/movietracker_test?sslmode=disable"
+  script:
+    - cd backend
+    - go mod download
+    - go vet ./...
+    - go test ./... -v -timeout 60s
+  cache:
+    key: go-modules-$CI_COMMIT_REF_SLUG
+    paths:
+      - backend/vendor/
+  only:
+    - merge_requests
+    - main
+    - develop
+
+test:frontend:
+  stage: test
+  image: node:20-alpine
+  script:
+    - cd frontend
+    - npm ci --silent
+    - npm run lint || true    # lint warnings don't block
+    - npm run build           # ensure it compiles clean
+  cache:
+    key: node-modules-$CI_COMMIT_REF_SLUG
+    paths:
+      - frontend/node_modules/
+  only:
+    - merge_requests
+    - main
+    - develop
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 2 — BUILD Docker images
+# ─────────────────────────────────────────────────────────────────────────────
+
+build:backend:
+  stage: build
+  <<: *docker_login
+  script:
+    - docker build
+        --cache-from $BACKEND_IMAGE:latest
+        --build-arg BUILDKIT_INLINE_CACHE=1
+        -t $BACKEND_IMAGE:$CI_COMMIT_SHA
+        -t $BACKEND_IMAGE:latest
+        ./backend
+  only:
+    - main
+    - develop
+
+build:frontend:
+  stage: build
+  <<: *docker_login
+  script:
+    - docker build
+        --cache-from $FRONTEND_IMAGE:latest
+        --build-arg BUILDKIT_INLINE_CACHE=1
+        --build-arg VITE_API_URL=/api
+        -t $FRONTEND_IMAGE:$CI_COMMIT_SHA
+        -t $FRONTEND_IMAGE:latest
+        ./frontend
+  only:
+    - main
+    - develop
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 3 — PUSH images to GitLab Container Registry
+# ─────────────────────────────────────────────────────────────────────────────
+
+push:backend:
+  stage: push
+  <<: *docker_login
+  script:
+    - docker push $BACKEND_IMAGE:$CI_COMMIT_SHA
+    - docker push $BACKEND_IMAGE:latest
+  only:
+    - main
+    - develop
+
+push:frontend:
+  stage: push
+  <<: *docker_login
+  script:
+    - docker push $FRONTEND_IMAGE:$CI_COMMIT_SHA
+    - docker push $FRONTEND_IMAGE:latest
+  only:
+    - main
+    - develop
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 4 — DEPLOY to Kubernetes via Helm
+# ─────────────────────────────────────────────────────────────────────────────
+
+deploy:staging:
+  stage: deploy
+  image:
+    name: alpine/helm:3.15.0
+    entrypoint: [""]
+  before_script:
+    - apk add --no-cache kubectl curl
+    - mkdir -p ~/.kube
+    - echo "$KUBE_CONFIG" | base64 -d > ~/.kube/config
+    - chmod 600 ~/.kube/config
+  script:
+    - helm upgrade --install $HELM_RELEASE ./helm
+        --namespace $K8S_NAMESPACE
+        --create-namespace
+        --set backend.image.tag=$CI_COMMIT_SHA
+        --set frontend.image.tag=$CI_COMMIT_SHA
+        --set backend.secrets.DATABASE_URL="$PROD_DATABASE_URL"
+        --set backend.secrets.JWT_SECRET="$PROD_JWT_SECRET"
+        --set backend.secrets.TMDB_API_KEY="${PROD_TMDB_KEY:-}"
+        --set ingress.host="${DEPLOY_HOST:-cinetrack.yourdomain.com}"
+        --wait
+        --timeout 5m
+    - echo "✅ Deployed commit $CI_COMMIT_SHA to staging"
+    - kubectl get pods -n $K8S_NAMESPACE
+  environment:
+    name: staging
+    url: https://$DEPLOY_HOST
+  only:
+    - develop
+
+deploy:production:
+  stage: deploy
+  image:
+    name: alpine/helm:3.15.0
+    entrypoint: [""]
+  before_script:
+    - apk add --no-cache kubectl
+    - mkdir -p ~/.kube
+    - echo "$KUBE_CONFIG" | base64 -d > ~/.kube/config
+    - chmod 600 ~/.kube/config
+  script:
+    - helm upgrade --install $HELM_RELEASE ./helm
+        --namespace $K8S_NAMESPACE
+        --create-namespace
+        --set backend.image.tag=$CI_COMMIT_SHA
+        --set frontend.image.tag=$CI_COMMIT_SHA
+        --set backend.secrets.DATABASE_URL="$PROD_DATABASE_URL"
+        --set backend.secrets.JWT_SECRET="$PROD_JWT_SECRET"
+        --set backend.secrets.TMDB_API_KEY="${PROD_TMDB_KEY:-}"
+        --set ingress.host="${DEPLOY_HOST:-cinetrack.yourdomain.com}"
+        --set ingress.tls.enabled=true
+        --set frontend.replicaCount=2
+        --set backend.replicaCount=2
+        --wait
+        --timeout 5m
+    - echo "✅ Production deploy of $CI_COMMIT_SHA complete"
+    - kubectl rollout status deployment/cinetrack-backend  -n $K8S_NAMESPACE
+    - kubectl rollout status deployment/cinetrack-frontend -n $K8S_NAMESPACE
+  environment:
+    name: production
+    url: https://$DEPLOY_HOST
+  when: manual          # ← requires a human click to deploy to production
+  only:
+    - main

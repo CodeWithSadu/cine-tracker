@@ -1,0 +1,9 @@
+apiVersion: v2
+name: cinetrack
+description: Helm chart for the Cinetrack Movies & Series Tracker
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+maintainers:
+  - name: Mahee
+    email: mahee@example.com

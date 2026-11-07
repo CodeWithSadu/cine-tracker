@@ -1,0 +1,52 @@
+global:
+  namespace: cinetrack
+  registry: registry.gitlab.com/YOUR_GITLAB_USERNAME/cinetrack
+
+backend:
+  replicaCount: 2
+  image:
+    repository: registry.gitlab.com/YOUR_GITLAB_USERNAME/cinetrack/backend
+    tag: latest
+    pullPolicy: Always
+  service:
+    port: 8080
+  env:
+    SERVER_PORT:  "8080"
+    ENVIRONMENT:  "production"
+    REDIS_URL:    "redis://redis:6379"
+  # ⚠️  Override these at deploy time — never commit real values
+  secrets:
+    DATABASE_URL: "postgres://postgres:CHANGE_ME@postgres:5432/movietracker?sslmode=disable"
+    JWT_SECRET:   "CHANGE_ME_32_CHAR_RANDOM_SECRET!!"
+    TMDB_API_KEY: ""
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 256Mi }
+
+frontend:
+  replicaCount: 2
+  image:
+    repository: registry.gitlab.com/YOUR_GITLAB_USERNAME/cinetrack/frontend
+    tag: latest
+    pullPolicy: Always
+  service:
+    port: 80
+  resources:
+    requests: { cpu: 50m,  memory: 64Mi  }
+    limits:   { cpu: 200m, memory: 128Mi }
+
+postgresql:
+  image: postgres:16-alpine
+  persistence:
+    size: 10Gi
+
+redis:
+  image: redis:7-alpine
+
+ingress:
+  enabled: true
+  className: nginx
+  host: cinetrack.yourdomain.com
+  tls:
+    enabled: false
+    secretName: cinetrack-tls

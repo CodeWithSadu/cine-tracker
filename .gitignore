@@ -1,0 +1,32 @@
+# ── Env files — NEVER commit real secrets ────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Node / Frontend ───────────────────────────────────────────────────────────
+node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+.vite/
+
+# ── Go / Backend ──────────────────────────────────────────────────────────────
+backend/bin/
+backend/*.exe
+backend/*.test
+backend/vendor/
+
+# ── Kubernetes secrets — never commit filled secrets ─────────────────────────
+k8s/secrets-filled.yaml
+
+# ── IDE / OS ──────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
