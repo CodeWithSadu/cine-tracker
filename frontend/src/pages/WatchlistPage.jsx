@@ -1,8 +1,15 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { watchlistAPI } from '../lib/api'
-import { Film, Tv, Star, Trash2, Edit2, X, Check, Loader2, List } from 'lucide-react'
+import { Download, Film, Tv, Star, Trash2, Edit2, X, Check, Loader2, List } from 'lucide-react'
 import clsx from 'clsx'
+
+function csvCell(value) {
+  let text = value == null ? '' : String(value)
+  // Prevent spreadsheet formula injection in user-controlled text fields.
+  if (/^[\t\r ]*[=+\-@]/.test(text)) text = `'${text}`
+  return `"${text.replace(/"/g, '""')}"`
+}
 
 function StarRating({ value, onChange }) {
   const [hov, setHov] = useState(0)
@@ -107,6 +114,8 @@ export default function WatchlistPage() {
   const [params, setParams] = useSearchParams()
   const [entries, setEntries] = useState([])
   const [loading, setLoading] = useState(true)
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState('')
   const [editEntry, setEditEntry] = useState(null)
   const status = params.get('status') || ''
   const mtype  = params.get('type')   || ''
@@ -120,6 +129,51 @@ export default function WatchlistPage() {
   }
 
   useEffect(() => { load() }, [status, mtype])
+
+  const exportCsv = async () => {
+    setExporting(true)
+    setExportError('')
+    try {
+      // Fetch without current page filters so the download always contains the full list.
+      const { data } = await watchlistAPI.getAll()
+      const allEntries = Array.isArray(data) ? data : []
+      const columns = [
+        'Title', 'Type', 'Status', 'Release date', 'Rating', 'Review notes',
+        'Date watched', 'Current season', 'Current episode',
+      ]
+      const statusLabels = {
+        plan_to_watch: 'Plan to watch', watching: 'Watching', watched: 'Watched',
+      }
+      const rows = allEntries.map(entry => {
+        const media = entry.media_item || {}
+        return [
+          media.title,
+          media.media_type === 'series' ? 'Series' : 'Movie',
+          statusLabels[entry.status] || entry.status,
+          media.release_date,
+          entry.rating,
+          entry.review_notes,
+          entry.date_watched ? String(entry.date_watched).split('T')[0] : '',
+          entry.current_season,
+          entry.current_episode,
+        ]
+      })
+      const csv = [columns, ...rows].map(row => row.map(csvCell).join(',')).join('\r\n')
+      const blob = new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `cinetrack-watchlist-${new Date().toISOString().slice(0, 10)}.csv`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+    } catch {
+      setExportError('Could not export your list. Please try again.')
+    } finally {
+      setExporting(false)
+    }
+  }
 
   const setFilter = (key, val) => {
     const next = new URLSearchParams(params)
@@ -138,7 +192,14 @@ export default function WatchlistPage() {
 
   return (
     <div className="p-6 lg:p-8 max-w-3xl mx-auto">
-      <h1 className="font-display font-semibold text-2xl mb-6">My List</h1>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+        <h1 className="font-display font-semibold text-2xl">My List</h1>
+        <button onClick={exportCsv} disabled={exporting} className="btn-ghost border border-border text-sm">
+          {exporting ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
+          {exporting ? 'Preparing…' : 'Export CSV'}
+        </button>
+      </div>
+      {exportError && <p role="alert" className="text-sm text-red-400 mb-4">{exportError}</p>}
 
       <div className="flex flex-wrap gap-3 mb-6">
         <div className="flex gap-1.5 flex-wrap">
